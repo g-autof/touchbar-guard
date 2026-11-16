@@ -22,8 +22,6 @@ log_step()    { echo -e "\n${BOLD}${CYAN}==>${RESET} ${BOLD}$1${RESET}"; }
 INSTALL_BIN="/usr/local/bin/touchbar_guard"
 INSTALL_PLIST="/Library/LaunchDaemons/com.github.touchbar_guard.plist"
 SERVICE_LABEL="com.github.touchbar_guard"
-LEGACY_PLIST="/Library/LaunchDaemons/com.yustyna.touchbar_guard.plist"
-LEGACY_LABEL="com.yustyna.touchbar_guard"
 LOG_FILE="/var/log/touchbar_guard.log"
 
 echo -e "${BOLD}======================================================${RESET}"
@@ -41,8 +39,14 @@ fi
 log_step "Stopping LaunchDaemon..."
 launchctl bootout "system/${SERVICE_LABEL}" 2>/dev/null || true
 launchctl unload "$INSTALL_PLIST" 2>/dev/null || true
-launchctl bootout "system/${LEGACY_LABEL}" 2>/dev/null || true
-launchctl unload "$LEGACY_PLIST" 2>/dev/null || true
+for legacy in /Library/LaunchDaemons/*touchbar_guard*.plist; do
+    if [ -f "$legacy" ] && [ "$legacy" != "$INSTALL_PLIST" ]; then
+        legacy_label="$(basename "$legacy" .plist)"
+        launchctl bootout "system/${legacy_label}" 2>/dev/null || true
+        launchctl unload "$legacy" 2>/dev/null || true
+        rm -f "$legacy" 2>/dev/null || true
+    fi
+done
 killall touchbar_guard 2>/dev/null || true
 log_success "Daemon stopped."
 
@@ -56,11 +60,6 @@ log_step "Removing installed files..."
 if [ -f "$INSTALL_PLIST" ]; then
     rm -f "$INSTALL_PLIST"
     log_success "Removed ${INSTALL_PLIST}"
-fi
-
-if [ -f "$LEGACY_PLIST" ]; then
-    rm -f "$LEGACY_PLIST"
-    log_success "Removed legacy ${LEGACY_PLIST}"
 fi
 
 if [ -f "$INSTALL_BIN" ]; then

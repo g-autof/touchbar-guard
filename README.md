@@ -1,6 +1,6 @@
 # TouchBar Guard (`touchbar_guard`)
 
-[![macOS](https://img.shields.io/badge/platform-macOS%2012%2B-blue.svg)](https://apple.com)
+[![macOS](https://img.shields.io/badge/macOS-15%2B%20(tested)-blue.svg)](https://apple.com)
 [![Architecture](https://img.shields.io/badge/arch-arm64%20%7C%20x86__64-orange.svg)](https://apple.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/language-Objective--C-green.svg)](src/touchbar_guard.m)
@@ -17,12 +17,14 @@ Documentation:
 
 On MacBook Pro models with a Touch Bar:
 - **Apple Silicon:** MacBook Pro (13", M1, 2020 — `MacBookPro17,1`), MacBook Pro (13", M2, 2022 — `Mac14,7`).
-- **Intel (Touch Bar models):** MacBook Pro 13" (2016–2020 with 4 Thunderbolt ports; all 13" models from 2018 onwards) and MacBook Pro 15" (2016–2019). *(Models without a Touch Bar, such as the 13" 2016–2017 two-port variant, are unaffected).*
+- **Intel (Touch Bar models):** MacBook Pro 13" with Touch Bar (2016–2020) and MacBook Pro 15" (2016–2019). *(Models without a Touch Bar, such as the 13" 2016–2017 two-port variant, are unaffected).*
 
 Over time, the Touch Bar OLED panel can die and stay completely black while the capacitive touch layer remains active, generating phantom touches. When combined with a worn or damaged lid-angle sensor (Hall effect sensor), closing the lid fails to put the laptop to sleep. As a result:
 - Phantom touches wake the display while locked.
 - Volume and brightness levels change erratically.
 - The laptop stays warm and discharges the battery in a bag.
+
+> **Compatibility Note:** Verified on a MacBook Pro (13", M1, 2020) running macOS 15+. Older macOS releases (12–14) and Intel-based Macs have not been tested. Suspending `ControlStrip` is likely to work similarly on Intel hardware, but display drivers differ and the DMA reference count panic was specifically observed on Apple Silicon.
 
 ---
 
@@ -44,7 +46,7 @@ Kernel Extensions in backtrace:
    com.apple.driver.AppleMobileDispH13G-DFR
 ```
 
-The `AppleMobileDispH13G-DFR` driver manages frame transmission to the Touch Bar via DMA. Halting `TouchBarServer` stops its message processing loop. The driver continues queueing frames, leading to an overflow of `_dmaReferences` inside `IOMemoryDescriptor` and triggering a kernel panic.
+The `AppleMobileDispH13G-DFR` driver manages frame transmission to the Touch Bar via DMA. Halting `TouchBarServer` stops its message loop. Frame transactions appear to stall without client completion, which likely triggers an overflow of `_dmaReferences` inside `IOMemoryDescriptor` and crashes the kernel.
 
 ---
 
@@ -62,8 +64,9 @@ Events are detected via Darwin BSD notifications (`com.apple.sessionagent.*`, `c
 
 ## Limitations
 
-- If `touchbar_guard` crashes or is killed (`kill -9`) while the screen is locked, `ControlStrip` will remain stopped. After unlocking, Touch Bar buttons will not respond to touches.
-- To manually thaw `ControlStrip`, run:
+- The daemon traps exit signals (`SIGTERM`, `SIGINT`, `SIGQUIT`) and automatically resumes `ControlStrip` before terminating. It also verifies lock state and resumes `ControlStrip` on launch if the screen is unlocked.
+- `ControlStrip` will only remain stopped if the daemon crashes unexpectedly or is terminated with `kill -9` (`SIGKILL`) while the screen is locked.
+- If this occurs, `ControlStrip` can be manually resumed with:
   ```bash
   killall -CONT ControlStrip
   ```

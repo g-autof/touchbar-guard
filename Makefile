@@ -11,8 +11,6 @@ TARGET = $(BIN_DIR)/touchbar_guard
 PLIST_NAME ?= com.github.touchbar_guard.plist
 PLIST_SRC = launchd/$(PLIST_NAME)
 SERVICE_LABEL ?= com.github.touchbar_guard
-LEGACY_LABEL ?= com.yustyna.touchbar_guard
-LEGACY_PLIST ?= $(INSTALL_PLIST_DIR)/com.yustyna.touchbar_guard.plist
 
 INSTALL_BIN_DIR ?= /usr/local/bin
 INSTALL_PLIST_DIR ?= /Library/LaunchDaemons
@@ -51,9 +49,6 @@ install: $(TARGET)
 	@echo "==> Stopping existing service if running..."
 	@-launchctl bootout system/$(SERVICE_LABEL) 2>/dev/null || true
 	@-launchctl unload $(INSTALL_PLIST_DIR)/$(PLIST_NAME) 2>/dev/null || true
-	@-launchctl bootout system/$(LEGACY_LABEL) 2>/dev/null || true
-	@-launchctl unload $(LEGACY_PLIST) 2>/dev/null || true
-	@-rm -f $(LEGACY_PLIST) 2>/dev/null || true
 	@-killall touchbar_guard 2>/dev/null || true
 	@sleep 1
 	@echo "==> Installing binary to $(INSTALL_BIN_DIR)/touchbar_guard..."
@@ -84,12 +79,9 @@ uninstall:
 	@echo "==> Stopping launchd daemon..."
 	@-launchctl bootout system/$(SERVICE_LABEL) 2>/dev/null || true
 	@-launchctl unload $(INSTALL_PLIST_DIR)/$(PLIST_NAME) 2>/dev/null || true
-	@-launchctl bootout system/$(LEGACY_LABEL) 2>/dev/null || true
-	@-launchctl unload $(LEGACY_PLIST) 2>/dev/null || true
 	@-killall touchbar_guard 2>/dev/null || true
 	@echo "==> Removing installed files..."
 	@rm -f $(INSTALL_PLIST_DIR)/$(PLIST_NAME)
-	@rm -f $(LEGACY_PLIST)
 	@rm -f $(INSTALL_BIN_DIR)/touchbar_guard
 	@echo "==> Ensuring ControlStrip is thawed (SIGCONT)..."
 	@-killall -CONT ControlStrip 2>/dev/null || true

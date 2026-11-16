@@ -1,6 +1,6 @@
 # TouchBar Guard (`touchbar_guard`)
 
-[![macOS](https://img.shields.io/badge/platform-macOS%2012%2B-blue.svg)](https://apple.com)
+[![macOS](https://img.shields.io/badge/macOS-15%2B%20(tested)-blue.svg)](https://apple.com)
 [![Architecture](https://img.shields.io/badge/arch-arm64%20%7C%20x86__64-orange.svg)](https://apple.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/language-Objective--C-green.svg)](src/touchbar_guard.m)
@@ -17,18 +17,20 @@
 
 На ноутбуках MacBook Pro з панеллю Touch Bar:
 - **Apple Silicon:** MacBook Pro (13", M1, 2020 — `MacBookPro17,1`), MacBook Pro (13", M2, 2022 — `Mac14,7`).
-- **Intel (з Touch Bar):** MacBook Pro 13" (2016–2020 з 4 портами Thunderbolt; з 2018 року — всі моделі 13") та MacBook Pro 15" (2016–2019). *(Моделі без Touch Bar, як-от 13" 2016–2017 з двома портами, цієї проблеми не мають).*
+- **Intel (з Touch Bar):** MacBook Pro 13" з Touch Bar (2016–2020) та MacBook Pro 15" (2016–2019). *(Моделі 13" 2016–2017 з двома портами без Touch Bar цієї проблеми не мають).*
 
 З часом дисплей Touch Bar може вийти з ладу (залишається чорним), проте сенсорна панель продовжує працювати і реєструвати випадкові натискання. Якщо при цьому зношений або пошкоджений датчик кута відкриття кришки (датчик Холла), закриття ноутбука не переводить систему в сон. У результаті:
 - Сенсор будить заблокований екран.
 - Мимовільно змінюються яскравість та гучність.
 - Ноутбук гріється в сумці та розряджає батарею.
 
+> **Примітка щодо сумісності:** Робота демона перевірена на MacBook Pro (13", M1, 2020) під macOS 15+. На старіших версіях macOS (12–14) та на комп'ютерах Intel тестування не проводилося. Підхід із зупинкою `ControlStrip` на Intel, найімовірніше, спрацює аналогічно, але драйвери кадрового буфера там інші, тому паніка через переповнення DMA спостерігалася саме на Apple Silicon.
+
 ---
 
 ## Чому не можна зупиняти `TouchBarServer` (Kernel Panic)
 
-Популярна порада з мережі — зупиняти процеси тачбара через `kill -STOP`:
+Популярна порада з мережі — зупиняти процеси Touch Bar через `kill -STOP`:
 
 ```bash
 # Небезпечно на нових версіях macOS
@@ -44,7 +46,7 @@ Kernel Extensions in backtrace:
    com.apple.driver.AppleMobileDispH13G-DFR
 ```
 
-Драйвер `AppleMobileDispH13G-DFR` відповідає за передачу кадрів на панель Touch Bar через DMA. Коли процес `TouchBarServer` зупинено за допомогою `SIGSTOP`, черга кадрових повідомлень зависає, що згодом викликає переповнення лічильника `_dmaReferences` в об'єкті ядра `IOMemoryDescriptor` та аварійне перезавантаження системи.
+Драйвер `AppleMobileDispH13G-DFR` відповідає за передачу кадрів на панель Touch Bar через DMA. Схоже, що коли процес `TouchBarServer` зупинено за допомогою `SIGSTOP`, черга кадрових повідомлень зависає, що, ймовірно, викликає переповнення лічильника `_dmaReferences` в об'єкті ядра `IOMemoryDescriptor` та аварійне перезавантаження системи.
 
 ---
 
@@ -62,8 +64,9 @@ Kernel Extensions in backtrace:
 
 ## Обмеження
 
-- Якщо демон `touchbar_guard` буде примусово зупинено (`kill -9`) у той момент, коли екран заблоковано, процес `ControlStrip` залишиться у замороженому стані. Після розблокування кнопки Touch Bar не реагуватимуть на дотики.
-- Щоб розморозити `ControlStrip` вручну, виконайте:
+- Демон коректно обробляє сигнали виходу (`SIGTERM`, `SIGINT`, `SIGQUIT`) і автоматично надсилає `SIGCONT` процесу `ControlStrip` перед завершенням роботи. Також перевірка та розморожування виконуються при старті демона, якщо екран не заблоковано.
+- `ControlStrip` може залишитися замороженим лише в разі аварійного падіння демона або примусового завершення через `kill -9` (`SIGKILL`) у момент, коли екран був заблокований.
+- Якщо це сталося, розморозити `ControlStrip` вручну можна командою:
   ```bash
   killall -CONT ControlStrip
   ```
