@@ -111,4 +111,15 @@ test: $(TARGET)
 	$(TARGET) --version
 	$(TARGET) --help
 	$(TARGET) --status
-	@echo "==> Tests passed successfully."
+	@echo "==> Testing invalid argument handling (must fail)..."
+	@if $(TARGET) --nonexistent-option 2>/dev/null; then \
+		echo "Error: Daemon accepted invalid option"; exit 1; \
+	else \
+		echo "==> Invalid option correctly rejected."; \
+	fi
+	@echo "==> Testing manual freeze and thaw cycle..."
+	$(TARGET) --freeze
+	$(TARGET) --status
+	$(TARGET) --thaw
+	$(TARGET) --status
+	@echo "==> All automated tests passed successfully."

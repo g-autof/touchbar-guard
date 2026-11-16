@@ -57,12 +57,8 @@ fi
 
 # 3. Build Check
 log_step "Verifying / Building Binary..."
-if [ ! -f "$BIN_SRC" ]; then
-    log_info "Binary not found. Compiling via make..."
-    (cd "$SCRIPT_DIR" && make universal)
-else
-    log_info "Using compiled binary at ${BIN_SRC}"
-fi
+log_info "Ensuring universal binary is compiled and up to date..."
+(cd "$SCRIPT_DIR" && make universal)
 
 # 4. Stop existing instance
 log_step "Stopping any running instances..."

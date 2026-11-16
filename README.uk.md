@@ -173,11 +173,32 @@ touchbar_guard --status
 === TouchBarGuard Status ===
   • Process: touchbar_guard (PID: 1245)
     Path:   /usr/local/bin/touchbar_guard
-    Status: SSLEEP (sleeping/responsive)
+    Status: RUNNING (active daemon)
 === ControlStrip Status ===
   • Process: ControlStrip (PID: 4215)
     Path:   /System/Library/CoreServices/ControlStrip.app/Contents/MacOS/ControlStrip
     Status: SRUN (running)
+```
+
+### Ручне тестування та команди CLI
+
+`touchbar_guard` має вбудовані CLI-команди для безпосереднього тестування:
+
+```bash
+# Перевірка статусу демона та ControlStrip
+touchbar_guard --status
+
+# Примусово заморозити ControlStrip (тест нейтралізації дотиків)
+touchbar_guard --freeze
+
+# Примусово розморозити ControlStrip (відновити роботу)
+touchbar_guard --thaw
+
+# Запуск у foreground-режимі для налагодження
+touchbar_guard -f
+
+# Запуск повного набору тестів через make
+make test
 ```
 
 ### Перегляд живих логів

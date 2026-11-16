@@ -173,11 +173,32 @@ Example output:
 === TouchBarGuard Status ===
   • Process: touchbar_guard (PID: 1245)
     Path:   /usr/local/bin/touchbar_guard
-    Status: SSLEEP (sleeping/responsive)
+    Status: RUNNING (active daemon)
 === ControlStrip Status ===
   • Process: ControlStrip (PID: 4215)
     Path:   /System/Library/CoreServices/ControlStrip.app/Contents/MacOS/ControlStrip
     Status: SRUN (running)
+```
+
+### Manual Testing & CLI Controls
+
+`touchbar_guard` provides CLI options for direct control and troubleshooting:
+
+```bash
+# Check running status of both daemon and ControlStrip
+touchbar_guard --status
+
+# Manually freeze ControlStrip (test phantom touch neutralization)
+touchbar_guard --freeze
+
+# Manually thaw ControlStrip (restore interactivity)
+touchbar_guard --thaw
+
+# Run daemon directly in foreground for debugging
+touchbar_guard -f
+
+# Run all automated tests via make
+make test
 ```
 
 ### Viewing Live Logs
