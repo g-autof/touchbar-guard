@@ -21,10 +21,12 @@ log_step()    { echo -e "\n${BOLD}${CYAN}==>${RESET} ${BOLD}$1${RESET}"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_SRC="${SCRIPT_DIR}/bin/touchbar_guard"
-PLIST_SRC="${SCRIPT_DIR}/launchd/com.yustyna.touchbar_guard.plist"
+PLIST_SRC="${SCRIPT_DIR}/launchd/com.github.touchbar_guard.plist"
 INSTALL_BIN="/usr/local/bin/touchbar_guard"
-INSTALL_PLIST="/Library/LaunchDaemons/com.yustyna.touchbar_guard.plist"
-SERVICE_LABEL="com.yustyna.touchbar_guard"
+INSTALL_PLIST="/Library/LaunchDaemons/com.github.touchbar_guard.plist"
+SERVICE_LABEL="com.github.touchbar_guard"
+LEGACY_PLIST="/Library/LaunchDaemons/com.yustyna.touchbar_guard.plist"
+LEGACY_LABEL="com.yustyna.touchbar_guard"
 LOG_FILE="/var/log/touchbar_guard.log"
 
 echo -e "${BOLD}======================================================${RESET}"
@@ -64,6 +66,9 @@ log_info "Ensuring universal binary is compiled and up to date..."
 log_step "Stopping any running instances..."
 launchctl bootout "system/${SERVICE_LABEL}" 2>/dev/null || true
 launchctl unload "$INSTALL_PLIST" 2>/dev/null || true
+launchctl bootout "system/${LEGACY_LABEL}" 2>/dev/null || true
+launchctl unload "$LEGACY_PLIST" 2>/dev/null || true
+rm -f "$LEGACY_PLIST" 2>/dev/null || true
 killall touchbar_guard 2>/dev/null || true
 sleep 1
 

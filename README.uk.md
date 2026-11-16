@@ -5,112 +5,68 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/language-Objective--C-green.svg)](src/touchbar_guard.m)
 
-Професійний, високоефективний системний демон для macOS, створений для нейтралізації **фантомних натискань** на моделях MacBook Pro зі зламаним, зношеним або чорним Touch Bar без виклику Kernel Panic.
+Системний демон для macOS, що блокує реакцію Touch Bar під час сну або блокування екрана для запобігання фантомним натисканням та Kernel Panic.
 
-Доступна документація:
+Документація:
 - 🇺🇸 [English Documentation](README.md)
 - 🇺🇦 [Українська документація](README.uk.md) (Цей файл)
 
 ---
 
-## Апаратна проблема
+## Проблема
 
-На ноутбуках MacBook Pro з OLED-панеллю Touch Bar:
-- **Apple Silicon:** MacBook Pro (13-дюймовий, M1, 2020 — `MacBookPro17,1`), MacBook Pro (13-дюймовий, M2, 2022 — `MacBookPro14,7`)
-- **Intel:** MacBook Pro (13-дюймовий, 15-дюймовий, 16-дюймовий, 2016–2020)
+На ноутбуках MacBook Pro з панеллю Touch Bar:
+- **Apple Silicon:** MacBook Pro (13", M1, 2020 — `MacBookPro17,1`), MacBook Pro (13", M2, 2022 — `Mac14,7`).
+- **Intel (з Touch Bar):** MacBook Pro 13" (2016–2020 з 4 портами Thunderbolt; з 2018 року — всі моделі 13") та MacBook Pro 15" (2016–2019). *(Моделі без Touch Bar, як-от 13" 2016–2017 з двома портами, цієї проблеми не мають).*
 
-З віком OLED-дисплей тачбара часто виходить з ладу: екран стає повністю чорним, проте ємнісний сенсорний шар (дигітайзер) залишається під напругою та починає реєструвати хаотичні **фантомні дотики** («примарні натискання»).
-
-Коли ця несправність поєднується зі зношеним датчиком кута відкриття кришки (датчиком Холла), закриття кришки ноутбука не переводить Mac у режим сну. У результаті:
-- Фантомні дотики постійно будять заблокований екран.
-- Хаотично змінюється яскравість екрана та гучність динаміків.
-- Мимовільно викликається Siri або вводяться випадкові натискання на екрані блокування.
-- Ноутбук гріється в рюкзаку чи сумці та розряджає акумулятор у нуль.
+З часом дисплей Touch Bar може вийти з ладу (залишається чорним), проте сенсорна панель продовжує працювати і реєструвати випадкові натискання. Якщо при цьому зношений або пошкоджений датчик кута відкриття кришки (датчик Холла), закриття ноутбука не переводить систему в сон. У результаті:
+- Сенсор будить заблокований екран.
+- Мимовільно змінюються яскравість та гучність.
+- Ноутбук гріється в сумці та розряджає батарею.
 
 ---
 
-## Фатальний баг популярних рішень: Kernel Panic
+## Чому не можна зупиняти `TouchBarServer` (Kernel Panic)
 
-Популярні інструкції з форумів та Reddit зазвичай пропонують зупиняти тачбар командою `kill -STOP` для обох процесів:
+Популярна порада з мережі — зупиняти процеси тачбара через `kill -STOP`:
 
 ```bash
-# ⚠️ НЕБЕЗПЕЧНИЙ МЕТОД - ВИКЛИКАЄ KERNEL PANIC НА СУЧАСНИХ MACOS
+# Небезпечно на нових версіях macOS
 kill -STOP $(pgrep TouchBarServer) $(pgrep ControlStrip)
 ```
 
-На сучасних версіях macOS (macOS 14 Sonoma, macOS 15 Sequoia та новіших), заморожування процесу `TouchBarServer` гарантовано призводить до фатального краху ядра (**Kernel Panic**):
+У моїх тестах на MacBook Pro (13", M1, 2020, `MacBookPro17,1`) під керуванням macOS 15+ заморожування `TouchBarServer` через деякий час призводило до збою ядра (Kernel Panic):
 
 ```text
 panic(cpu 1 caller 0xfffffe001ec4cf3c): _dmaReferences overflow @IOMemoryDescriptor.cpp:5086
-Debugger message: panic
-Backtrace (CPU 1), panicked thread: 0xfffffe1ffc774640:
 ...
 Kernel Extensions in backtrace:
    com.apple.driver.AppleMobileDispH13G-DFR
 ```
 
-### Технічні причини збою ядра:
-1. **Драйвер кадрового буфера DFR:** В архітектурах Apple Silicon та чипах T2 ядро використовує драйвери на кшталт `com.apple.driver.AppleMobileDispH13G-DFR` для обслуговування апаратного буфера Display Function Row (DFR).
-2. **Клієнт сервера відображення:** Процес `TouchBarServer` є прямим клієнтом цього драйвера в просторі користувача.
-3. **Зависання черги DMA:** Коли `TouchBarServer` отримує сигнал `SIGSTOP`, його цикл обробки повідомлень Mach зупиняється. Драйвер ядра продовжує генерувати транзакції DMA, проте зупинений клієнт більше не надсилає підтвердження завершення кадрів.
-4. **Переповнення лічильника посилань:** На кожну транзакцію драйвер інкрементує лічильник посилань `_dmaReferences` в об'єкті ядра `IOMemoryDescriptor`. У ядрі XNU цей лічильник реалізований як знакове 16-бітне ціле число (максимальне значення: `32 767`).
-5. **Аварійна зупинка (Panic):** Через короткий час `_dmaReferences` перевищує 32 767, спрацьовує перевірка переповнення в `IOMemoryDescriptor.cpp:5086`, і система миттєво перезавантажується.
+Драйвер `AppleMobileDispH13G-DFR` відповідає за передачу кадрів на панель Touch Bar через DMA. Коли процес `TouchBarServer` зупинено за допомогою `SIGSTOP`, черга кадрових повідомлень зависає, що згодом викликає переповнення лічильника `_dmaReferences` в об'єкті ядра `IOMemoryDescriptor` та аварійне перезавантаження системи.
 
 ---
 
-## Хірургічне рішення
+## Принцип роботи
 
-`touchbar_guard` використовує точний і протестований підхід:
+Щоб уникнути Kernel Panic, `touchbar_guard` не чіпає процес `TouchBarServer`, а керує виключно процесом `ControlStrip`:
 
-> **Правило:** НІКОЛИ не надсилати сигнали процесу `TouchBarServer`! Заморожувати ТІЛЬКИ `ControlStrip`.
+1. **Блокування екрана або сон:** демон надсилає `SIGSTOP` процесу `ControlStrip`. Панель перестає реагувати на натискання (гучність, яскравість та кнопки UI не спрацьовують).
+2. **Фонові драйвери:** `TouchBarServer` продовжує працювати у звичайному режимі, завдяки чому кадровий буфер та черга DMA опрацьовуються без помилок.
+3. **Розблокування або пробудження:** демон надсилає `SIGCONT` процесу `ControlStrip`, повертаючи працездатність інтерфейсу.
 
-```text
-┌────────────────────────────────────────────────────────┐
-│             Подія блокування або сну екрана            │
-└───────────────────────────┬────────────────────────────┘
-                            │
-              ┌─────────────▼─────────────┐
-              │    Демон touchbar_guard   │
-              └─────────────┬─────────────┘
-                            │
-              ┌─────────────▼─────────────┐
-              │   SIGSTOP -> ControlStrip │
-              └─────────────┬─────────────┘
-                            │
-       ┌────────────────────┴────────────────────┐
-       ▼                                         ▼
-┌──────────────────────────────┐   ┌──────────────────────────────┐
-│  ControlStrip (Заморожено)   │   │ TouchBarServer (Активний)    │
-│  - Немає реакції на дотики   │   │ - Кадрові транзакції в нормі │
-│  - Гучність/яскравість мовчать│  │ - Черга DMA очищується       │
-│  - Фантомні натискання знято │   │ - НУЛЬ витоків лічильників   │
-└──────────────────────────────┘   └──────────────────────────────┘
-```
-
-1. **`ControlStrip` (`/System/Library/CoreServices/ControlStrip.app`)** — це виключно призначений для інтерфейсу користувача процес (AppKit/CoreGraphics), який відповідає за відображення кнопок, повзунків яскравості, гучності та кнопки Siri.
-2. Призупинення `ControlStrip` сигналом `SIGSTOP` повністю вимикає обробку UI-подій тачбара. Фантомні дотики на дигітайзері не мають жодного ефекту.
-3. Водночас `TouchBarServer` продовжує штатну взаємодію з драйвером `AppleMobileDispH13G-DFR`, виключаючи зупинку DMA-транзакцій або витік посилань дескриптора пам'яті.
-4. При розблокуванні екрана або пробудженні дисплея демон надсилає `SIGCONT` процесу `ControlStrip`, миттєво повертаючи працездатність без жодних затримок.
+Для відстеження подій демон підписується на системні сповіщення Darwin BSD (`com.apple.sessionagent.*`, `com.apple.mobile.keybagd.lock_status`), події підсистеми живлення та підсвічування IOKit (`IORegisterForSystemPower`, `IODisplayWrangler`), а також повідомлення `NSWorkspace` та `NSDistributedNotificationCenter`.
 
 ---
 
-## Багаторівневе перехоплення подій
+## Обмеження
 
-Для надійного перехоплення всіх станів блокування, сну та перемикання користувачів `touchbar_guard` слухає події через чотири незалежні системи:
-
-1. **Системні сповіщення Darwin BSD (`notify.h`):**
-   - Блокування: `com.apple.sessionagent.screenIsLocked`, `com.apple.sessionagent.screenLockUIIsShown`, `com.apple.sessionagent.shieldWindowRaised`, `com.apple.mobile.keybagd.lock_status`, `com.apple.screensaver.didstart`.
-   - Розблокування: `com.apple.sessionagent.screenIsUnlocked`, `com.apple.sessionagent.screenLockUIIsHidden`, `com.apple.sessionagent.shieldWindowLowered`, `com.apple.screensaver.didstop`.
-2. **Розподілені сповіщення Cocoa (`NSDistributedNotificationCenter`):**
-   - `com.apple.screenIsLocked`
-   - `com.apple.screenIsUnlocked`
-3. **Сповіщення підсистеми живлення та дисплея IOKit (`IOPMLib.h`, `IOMessage.h`):**
-   - `IORegisterForSystemPower`: обробка `kIOMessageSystemWillSleep`, `kIOMessageSystemHasPoweredOn`, `kIOMessageCanSystemSleep`.
-   - `IODisplayWrangler`: обробка вимкнення та увімкнення підсвічування екрана (`kIOMessageDeviceWillPowerOff`, `kIOMessageDeviceHasPoweredOn`).
-4. **Сповіщення робочого простору AppKit (`NSWorkspace`):**
-   - `NSWorkspaceScreensDidSleepNotification` та `NSWorkspaceScreensDidWakeNotification`
-   - `NSWorkspaceWillSleepNotification` та `NSWorkspaceDidWakeNotification`
-   - `NSWorkspaceSessionDidResignActiveNotification` та `NSWorkspaceSessionDidBecomeActiveNotification`
+- Якщо демон `touchbar_guard` буде примусово зупинено (`kill -9`) у той момент, коли екран заблоковано, процес `ControlStrip` залишиться у замороженому стані. Після розблокування кнопки Touch Bar не реагуватимуть на дотики.
+- Щоб розморозити `ControlStrip` вручну, виконайте:
+  ```bash
+  killall -CONT ControlStrip
+  ```
 
 ---
 
@@ -118,32 +74,31 @@ Kernel Extensions in backtrace:
 
 ```text
 touchbar-guard/
-├── Makefile                                # Збірка, встановлення, видалення, перевірка статусу та логів
-├── install.sh                              # Автоматизований скрипт встановлення з підвищенням прав
-├── uninstall.sh                            # Скрипт чистого видалення з гарантованим розмороженням
+├── Makefile                                # Збірка, встановлення, видалення, статус
+├── install.sh                              # Скрипт встановлення
+├── uninstall.sh                            # Скрипт видалення
 ├── LICENSE                                 # Ліцензія MIT
-├── README.md                               # Документація англійською мовою
-├── README.uk.md                            # Документація українською мовою
+├── README.md                               # Англійська документація
+├── README.uk.md                            # Українська документація
 ├── launchd/
-│   ├── com.yustyna.touchbar_guard.plist    # Конфігурація сервісу launchd
-│   └── com.github.touchbar_guard.plist     # Нейтральний маніфест для GitHub
+│   └── com.github.touchbar_guard.plist     # Конфігурація для launchd
 └── src/
-    └── touchbar_guard.m                    # Вихідний код демона на Objective-C
+    └── touchbar_guard.m                    # Вихідний код на Objective-C
 ```
 
 ---
 
-## Швидкий старт та встановлення
+## Встановлення
 
-### Варіант 1: Через скрипт автоматичного встановлення (Рекомендовано)
+### Варіант 1: Скрипт інсталяції
 
 ```bash
-git clone https://github.com/yustyna/touchbar-guard.git
+git clone https://github.com/g-autof/touchbar-guard.git
 cd touchbar-guard
 sudo ./install.sh
 ```
 
-### Варіант 2: За допомогою `make`
+### Варіант 2: Через `make`
 
 ```bash
 cd touchbar-guard
@@ -151,79 +106,45 @@ make universal
 sudo make install
 ```
 
-Скрипт інсталяції:
-- Компілює універсальний бінарний файл Mach-O (`arm64` + `x86_64`).
-- Встановлює його у `/usr/local/bin/touchbar_guard`.
-- Налаштовує `/Library/LaunchDaemons/com.yustyna.touchbar_guard.plist` з прапорцями `RunAtLoad` та `KeepAlive`.
-- Запускає службу через `launchctl bootstrap`.
-- Створює лінійно-буферизований лог у `/var/log/touchbar_guard.log`.
+Скрипт збирає універсальний бінарник (`arm64` + `x86_64`), копіює його в `/usr/local/bin/touchbar_guard`, реєструє службу `/Library/LaunchDaemons/com.github.touchbar_guard.plist` та запускає її через `launchd`. Логи пишуться у `/var/log/touchbar_guard.log`.
 
 ---
 
-## Перевірка статусу та діагностика
+## Перевірка статусу та команди
 
-Перевірити статус демона та стан процесу `ControlStrip`:
+Перевірити статус демона та стан `ControlStrip`:
 
 ```bash
 touchbar_guard --status
 ```
 
-Приклад виводу:
-```text
-=== TouchBarGuard Status ===
-  • Process: touchbar_guard (PID: 1245)
-    Path:   /usr/local/bin/touchbar_guard
-    Status: RUNNING (active daemon)
-=== ControlStrip Status ===
-  • Process: ControlStrip (PID: 4215)
-    Path:   /System/Library/CoreServices/ControlStrip.app/Contents/MacOS/ControlStrip
-    Status: SRUN (running)
+Корисні прапорці:
+```bash
+touchbar_guard --status    # Показати PID і стан touchbar_guard та ControlStrip
+touchbar_guard --freeze    # Вручну заморозити ControlStrip (SIGSTOP)
+touchbar_guard --thaw      # Вручну розморозити ControlStrip (SIGCONT)
+touchbar_guard -f          # Запуск демона у foreground (для налагодження)
 ```
 
-### Ручне тестування та команди CLI
+Ціль `make test` компілює бінарник та перевіряє прапорці `--help`, `--version`, `--status`, коректність обробки невідомих параметрів, а також виконує пробний цикл freeze/thaw.
 
-`touchbar_guard` має вбудовані CLI-команди для безпосереднього тестування:
-
-```bash
-# Перевірка статусу демона та ControlStrip
-touchbar_guard --status
-
-# Примусово заморозити ControlStrip (тест нейтралізації дотиків)
-touchbar_guard --freeze
-
-# Примусово розморозити ControlStrip (відновити роботу)
-touchbar_guard --thaw
-
-# Запуск у foreground-режимі для налагодження
-touchbar_guard -f
-
-# Запуск повного набору тестів через make
-make test
-```
-
-### Перегляд живих логів
+### Логи
 
 ```bash
-make logs
-# Або напряму:
 tail -f /var/log/touchbar_guard.log
-```
-
-Приклад записів у лозі:
-```text
-[2026-11-16 23:15:02] [TouchBarGuard] BLOCKED Touch Bar [SIGSTOP -> ControlStrip (instances: 1)] (Reason: Screen lock UI shown)
-[2026-11-16 23:15:18] [TouchBarGuard] UNBLOCKED Touch Bar [SIGCONT -> ControlStrip (instances: 1)] (Reason: Session screen unlocked)
+# або
+make logs
 ```
 
 ---
 
 ## Видалення
 
-Щоб повністю видалити демон, видалити службу з launchd та гарантовано розморозити `ControlStrip`:
+Зупинити службу, видалити файли та розморозити `ControlStrip`:
 
 ```bash
 sudo ./uninstall.sh
-# Або через make:
+# або
 sudo make uninstall
 ```
 
@@ -231,4 +152,4 @@ sudo make uninstall
 
 ## Ліцензія
 
-Цей проект поширюється на умовах ліцензії [MIT](LICENSE).
+[MIT](LICENSE)
