@@ -1,68 +1,35 @@
 /*
- * touchbar_guard - Modern macOS daemon to neutralize phantom touches on MacBook Pros
+ * touchbar_guard - macOS daemon that disables Touch Bar touch handling during
+ * screen lock or sleep, to prevent phantom touches.
  *
  * Copyright (c) 2026 Yustyna
  * Licensed under the MIT License.
  *
- * ======================================================================================
- * THE PROBLEM:
- * ======================================================================================
- * On MacBook Pro models with Apple Silicon and Touch Bar (e.g. 13" M1 MacBookPro17,1
- * and 13" M2 MacBookPro14,7), as well as late Intel models (2016-2020), hardware aging
- * commonly leads to failure of the OLED Touch Bar display. The display stays pitch black,
- * yet the capacitive touch digitizer layer remains fully functional and starts generating
- * errant "phantom touches".
+ * Problem:
+ *   On MacBook Pro models with a Touch Bar, the OLED panel can die and stay black
+ *   while the touch layer keeps working and registers phantom touches. With a worn
+ *   lid angle (Hall effect) sensor, closing the lid does not put the Mac to sleep,
+ *   and the phantom touches wake the display, change volume and brightness, and
+ *   drain the battery.
  *
- * When combined with a worn or defective Hall effect lid angle sensor (lid sensor),
- * closing the laptop lid does NOT cause the Mac to sleep. When the screen locks or
- * displays sleep, phantom touches continuously wake up the display, adjust display brightness,
- * change audio volume, trigger Siri, or register ghost keystrokes, draining the battery
- * inside backpacks and overheating the machine.
+ * Approach:
+ *   Suspend only `ControlStrip` (SIGSTOP) on lock/sleep and resume it (SIGCONT) on
+ *   unlock/wake. `TouchBarServer` is never signaled.
  *
- * ======================================================================================
- * THE FATAL BUG IN EXISTING WORKAROUNDS (Kernel Panic Mechanics):
- * ======================================================================================
- * Several community workarounds circulating online (e.g., Reddit scripts) attempt to
- * stop the Touch Bar by executing:
- *      kill -STOP $(pgrep TouchBarServer) $(pgrep ControlStrip)
+ * Why not `kill -STOP TouchBarServer`:
+ *   In testing on a 13" M1 MacBook Pro (MacBookPro17,1) with macOS 15+, suspending
+ *   `TouchBarServer` eventually caused a kernel panic:
  *
- * On modern macOS (macOS 14 Sonoma, macOS 15 Sequoia, and newer), freezing `TouchBarServer`
- * causes a catastrophic, 100% reproducible KERNEL PANIC:
+ *     panic(...): _dmaReferences overflow @IOMemoryDescriptor.cpp:5086
+ *     Kernel Extensions in backtrace: com.apple.driver.AppleMobileDispH13G-DFR
  *
- *   panic(cpu 1 caller 0xfffffe001ec4cf3c): _dmaReferences overflow @IOMemoryDescriptor.cpp:5086
- *   Debugger message: panic
- *   Backtrace (CPU 1), panicked thread: 0xfffffe1ffc774640:
- *   ...
- *   Kernel Extensions in backtrace:
- *      com.apple.driver.AppleMobileDispH13G-DFR(...)
+ *   The likely cause is that the DFR driver keeps queuing DMA frame transactions
+ *   that the suspended client never completes, which overflows a reference counter.
+ *   This mechanism is a hypothesis based on the panic log, not a verified analysis
+ *   of the kernel source.
  *
- * WHY THIS HAPPENS:
- * 1. Apple Silicon Macs use the `com.apple.driver.AppleMobileDispH13G-DFR` driver to manage
- *    the DFR (Display Function Row) hardware framebuffer.
- * 2. `TouchBarServer` is the direct user-space display server client for this DFR driver.
- * 3. When `TouchBarServer` receives SIGSTOP, its Mach message loop halts. As a result,
- *    it cannot acknowledge DMA frame transfers completed by the DFR hardware driver.
- * 4. The DFR kernel driver continues to queue DMA transactions and increments an
- *    internal `IOMemoryDescriptor` reference counter (`_dmaReferences`).
- * 5. In XNU (`osfmk/arm/pmap.c` and `iokit/Kernel/IOMemoryDescriptor.cpp`), `_dmaReferences`
- *    is implemented as a signed 16-bit integer (max value: 32,767).
- * 6. Within a short period of unserviced DMA requests, `_dmaReferences` exceeds 32,767,
- *    triggering an immediate kernel panic assertion at line 5086 of `IOMemoryDescriptor.cpp`.
- *
- * ======================================================================================
- * THE SURGICAL SOLUTION IMPLEMENTED HERE:
- * ======================================================================================
- * NEVER signal or freeze `TouchBarServer`!
- * Instead, this daemon targets ONLY `ControlStrip` (`/System/Library/CoreServices/ControlStrip.app`).
- *
- * 1. `ControlStrip` is purely a user-space AppKit/CoreGraphics UI client application.
- *    It renders the interactive widgets (volume slider, brightness slider, mute, Siri).
- * 2. Suspending `ControlStrip` via SIGSTOP stops all UI event handling on the Touch Bar.
- *    Phantom touches on the digitizer no longer trigger any UI action.
- * 3. Crucially, `TouchBarServer` and the DFR kernel driver continue to communicate normally:
- *    zero DMA frame stalls, zero IOMemoryDescriptor reference leaks, ZERO kernel panics.
- * 4. When the display wakes or the user unlocks the screen, this daemon sends SIGCONT to
- *    `ControlStrip`, instantly restoring full interactivity.
+ * Tested only on a 13" M1 MacBook Pro with macOS 15+. Other macOS versions and
+ * Intel Macs are untested.
  */
 
 #import <Foundation/Foundation.h>
