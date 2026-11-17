@@ -324,6 +324,29 @@ static void unblock_touchbar(const char *reason) {
     }
 }
 
+// Returns true if the keybag reports the session as locked (state != 0).
+// Falls back to "unlocked" if the state is unavailable, which keeps the old behavior.
+static bool is_session_locked(void) {
+    int token = 0;
+    if (notify_register_check("com.apple.mobile.keybagd.lock_status", &token) != NOTIFY_STATUS_OK) {
+        return false;
+    }
+    uint64_t state = 0;
+    notify_get_state(token, &state);
+    notify_cancel(token);
+    return state != 0;
+}
+
+// Resume ControlStrip on wake-type events only if the session is not locked.
+// Unlock events still resume it unconditionally.
+static void unblock_touchbar_on_wake(const char *reason) {
+    if (is_session_locked()) {
+        log_message("Wake event ignored, session still locked (Reason: %s)", reason);
+        return;
+    }
+    unblock_touchbar(reason);
+}
+
 // IOKit system power callback
 static void power_callback(__unused void *refCon, __unused io_service_t service, natural_t messageType, void *messageArgument) {
     switch (messageType) {
@@ -332,11 +355,11 @@ static void power_callback(__unused void *refCon, __unused io_service_t service,
             IOAllowPowerChange(g_power_port, (long)messageArgument);
             break;
         case kIOMessageSystemWillNotSleep:
-            unblock_touchbar("System sleep cancelled (IOKit)");
+            unblock_touchbar_on_wake("System sleep cancelled (IOKit)");
             break;
         case kIOMessageSystemWillPowerOn:
         case kIOMessageSystemHasPoweredOn:
-            unblock_touchbar("System powered on (IOKit)");
+            unblock_touchbar_on_wake("System powered on (IOKit)");
             break;
         case kIOMessageCanSystemSleep:
             IOAllowPowerChange(g_power_port, (long)messageArgument);
@@ -351,7 +374,7 @@ static void display_wrangler_callback(__unused void *refcon, __unused io_service
     if (messageType == kIOMessageDeviceWillPowerOff) {
         block_touchbar("Display wrangler power off (IODisplayWrangler)");
     } else if (messageType == kIOMessageDeviceHasPoweredOn) {
-        unblock_touchbar("Display wrangler power on (IODisplayWrangler)");
+        unblock_touchbar_on_wake("Display wrangler power on (IODisplayWrangler)");
     }
 }
 
@@ -393,7 +416,7 @@ static void setup_signal_handlers(dispatch_queue_t queue) {
 
     sighup_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGHUP, 0, queue);
     dispatch_source_set_event_handler(sighup_src, ^{
-        log_message("Received SIGHUP, resetting state and refreshing listeners.");
+        log_message("Received SIGHUP, ignoring (reload is not supported).");
     });
     dispatch_resume(sighup_src);
 }
@@ -665,7 +688,7 @@ int main(int argc, const char * argv[]) {
                               object:nil
                                queue:[NSOperationQueue mainQueue]
                           usingBlock:^(__unused NSNotification * _Nonnull note) {
-            unblock_touchbar("Screens did wake (NSWorkspace)");
+            unblock_touchbar_on_wake("Screens did wake (NSWorkspace)");
         }];
 
         [wsCenter addObserverForName:NSWorkspaceWillSleepNotification
@@ -679,7 +702,7 @@ int main(int argc, const char * argv[]) {
                               object:nil
                                queue:[NSOperationQueue mainQueue]
                           usingBlock:^(__unused NSNotification * _Nonnull note) {
-            unblock_touchbar("Workspace did wake (NSWorkspace)");
+            unblock_touchbar_on_wake("Workspace did wake (NSWorkspace)");
         }];
 
         [wsCenter addObserverForName:NSWorkspaceSessionDidResignActiveNotification
@@ -693,7 +716,7 @@ int main(int argc, const char * argv[]) {
                               object:nil
                                queue:[NSOperationQueue mainQueue]
                           usingBlock:^(__unused NSNotification * _Nonnull note) {
-            unblock_touchbar("Session became active (NSWorkspace)");
+            unblock_touchbar_on_wake("Session became active (NSWorkspace)");
         }];
         log_message("Registered NSWorkspace notification listeners.");
 

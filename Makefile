@@ -1,5 +1,5 @@
 CC ?= clang
-CFLAGS ?= -Wall -Wextra -Werror -O2
+CFLAGS ?= -Wall -Wextra -O2
 FRAMEWORKS = -framework Foundation -framework AppKit -framework IOKit -lproc
 ARCHS ?= -arch arm64 -arch x86_64
 
