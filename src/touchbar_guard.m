@@ -51,8 +51,9 @@
 #include <string.h>
 #include <time.h>
 
-#define DAEMON_VERSION "1.0.0"
+#define DAEMON_VERSION "1.1.0"
 #define TARGET_PROCESS "ControlStrip"
+#define DFR_SERVER_PROCESS "TouchBarServer"
 
 // Handle kIOMainPortDefault compatibility across SDK versions without triggering deprecation warnings
 #ifndef kIOMainPortDefault
@@ -291,6 +292,29 @@ static void check_process_status(const char *target_name) {
     free(pids);
 }
 
+// Terminate TouchBarServer (SIGKILL) so launchd immediately respawns it with a clean
+// HMD drawable queue, clearing any leaked IOMemoryDescriptor references before overflow.
+static void recycle_touchbar_server(const char *reason) {
+    int count = send_signal_to_process(DFR_SERVER_PROCESS, SIGKILL);
+    if (count > 0) {
+        log_message("Recycled %s (instances: %d, SIGKILL) to reset DMA frame queue (Reason: %s)",
+                    DFR_SERVER_PROCESS, count, reason);
+    }
+}
+
+// Setup periodic watchdog timer to recycle TouchBarServer every 30 minutes
+static void setup_watchdog_timer(dispatch_queue_t queue) {
+    static dispatch_source_t timer_src;
+    timer_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    // Every 30 minutes (1800 seconds), with 10s leeway for power efficiency
+    dispatch_source_set_timer(timer_src, dispatch_time(DISPATCH_TIME_NOW, 1800LL * NSEC_PER_SEC), 1800ULL * NSEC_PER_SEC, 10ULL * NSEC_PER_SEC);
+    dispatch_source_set_event_handler(timer_src, ^{
+        recycle_touchbar_server("Periodic watchdog (prevent DMA reference accumulation)");
+    });
+    dispatch_resume(timer_src);
+    log_message("Initialized periodic DMA watchdog timer (30-minute interval).");
+}
+
 // Freeze ControlStrip to stop UI controls (brightness, volume, mute, siri)
 static void block_touchbar(const char *reason) {
     // If state is already recorded as blocked AND the process is genuinely stopped, skip
@@ -306,6 +330,9 @@ static void block_touchbar(const char *reason) {
         // Do not latch g_is_blocked if no instances were signaled, so future triggers can retry
         log_message("BLOCKED Touch Bar requested (Reason: %s, note: %s process not found or signal failed)", reason, TARGET_PROCESS);
     }
+
+    // Reset TouchBarServer to clear any HMD queue stall and stop DMA leak during lock/sleep
+    recycle_touchbar_server(reason);
 }
 
 // Resume ControlStrip
@@ -322,6 +349,9 @@ static void unblock_touchbar(const char *reason) {
     } else {
         log_message("UNBLOCKED Touch Bar (Reason: %s, note: %s process not found)", reason, TARGET_PROCESS);
     }
+
+    // Ensure TouchBarServer has a fresh session upon wake/unlock
+    recycle_touchbar_server(reason);
 }
 
 // Returns true if the keybag reports the session as locked (state != 0).
@@ -429,9 +459,10 @@ static void print_usage(const char *prog_name) {
     printf("Options:\n");
     printf("  -d, --daemon       Fork into background daemon mode\n");
     printf("  -f, --foreground   Run in foreground with stdout logging (default for launchd)\n");
-    printf("  -s, --status       Display status of TouchBarGuard and %s\n", TARGET_PROCESS);
+    printf("  -s, --status       Display status of TouchBarGuard, %s, and %s\n", TARGET_PROCESS, DFR_SERVER_PROCESS);
     printf("      --freeze       Manually freeze %s (SIGSTOP) for testing\n", TARGET_PROCESS);
     printf("      --thaw         Manually thaw %s (SIGCONT)\n", TARGET_PROCESS);
+    printf("      --recycle      Manually recycle %s (SIGKILL) to reset DMA queue\n", DFR_SERVER_PROCESS);
     printf("  -v, --version      Show version and build info\n");
     printf("  -h, --help         Show this help message\n\n");
 }
@@ -480,7 +511,20 @@ int main(int argc, const char * argv[]) {
                 check_process_status("touchbar_guard");
                 printf("=== ControlStrip Status ===\n");
                 check_process_status(TARGET_PROCESS);
+                printf("=== TouchBarServer Status ===\n");
+                check_process_status(DFR_SERVER_PROCESS);
                 return 0;
+            }
+            if (strcmp(arg, "--recycle") == 0) {
+                printf("Recycling %s (SIGKILL) to reset DMA frame queue...\n", DFR_SERVER_PROCESS);
+                int count = send_signal_to_process(DFR_SERVER_PROCESS, SIGKILL);
+                if (count > 0) {
+                    printf("Successfully recycled %d instance(s) of %s.\n", count, DFR_SERVER_PROCESS);
+                    return 0;
+                } else {
+                    fprintf(stderr, "Notice: %s not found or permission denied (must run as root/sudo).\n", DFR_SERVER_PROCESS);
+                    return 1;
+                }
             }
             if (strcmp(arg, "--freeze") == 0 || strcmp(arg, "--block") == 0) {
                 printf("Freezing %s (SIGSTOP)...\n", TARGET_PROCESS);
@@ -546,6 +590,9 @@ int main(int argc, const char * argv[]) {
 
         // Setup clean shutdown handlers
         setup_signal_handlers(dispatch_get_main_queue());
+
+        // Setup periodic watchdog timer to recycle TouchBarServer every 30 minutes
+        setup_watchdog_timer(dispatch_get_main_queue());
 
         // -------------------------------------------------------------------------
         // 1. BSD Darwin Notifications (notify.h)

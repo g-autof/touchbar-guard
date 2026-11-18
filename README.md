@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/language-Objective--C-green.svg)](src/touchbar_guard.m)
 
-A macOS daemon that disables Touch Bar touch handling during sleep or screen lock to prevent ghost touches and kernel panics.
+A macOS daemon that prevents ghost touches on MacBook Pros with damaged Touch Bars and eliminates `_dmaReferences overflow` kernel panics.
 
 Documentation:
 - 🇺🇸 [English Documentation](README.md) (This file)
@@ -19,46 +19,37 @@ On MacBook Pro models with a Touch Bar:
 - **Apple Silicon:** MacBook Pro (13", M1, 2020 — `MacBookPro17,1`), MacBook Pro (13", M2, 2022 — `Mac14,7`).
 - **Intel (Touch Bar models):** MacBook Pro 13" with Touch Bar (2016–2020) and MacBook Pro 15" (2016–2019). *(Models without a Touch Bar, such as the 13" 2016–2017 two-port variant, are unaffected).*
 
-Over time, the Touch Bar OLED panel can die and stay completely black while the capacitive touch layer remains active, generating phantom touches. When combined with a worn or damaged lid-angle sensor (Hall effect sensor), closing the lid fails to put the laptop to sleep. As a result:
-- Phantom touches wake the display while locked.
-- Volume and brightness levels change erratically.
-- The laptop stays warm and discharges the battery in a bag.
+Over time, two hardware failures frequently coincide:
+1. The Touch Bar OLED panel fails (remains pitch black), but the capacitive digitizer layer remains powered and generates erratic phantom touches.
+2. The lid-angle sensor (Hall effect sensor) fails, preventing the laptop from sleeping when closed.
+
+This causes two critical issues:
+- **Phantom Input:** Random touches wake the display, turn the volume to maximum, change brightness, or trigger Siri while the laptop is locked or carried in a backpack.
+- **Kernel Panic (`_dmaReferences overflow`):** When the display dims or locks, `TouchBarServer` enters an empty drawable queue loop (`SLSHMDGetDrawable - unexpected server error response: 1000`) at ~70 Hz. In `AppleMobileDispH13G-DFR`, unacknowledged DMA frame transactions leak a reference counter in XNU's `IOMemoryDescriptor.cpp`. Because `_dmaReferences` is a signed 16-bit integer, after exactly 32,767 leaked frames (~8–16 hours of idling), it overflows and crashes macOS:
+  ```text
+  panic(cpu 1 caller 0xfffffe00489a1ee4): _dmaReferences overflow @IOMemoryDescriptor.cpp:5086
+  Kernel Extensions in backtrace:
+     com.apple.driver.AppleMobileDispH13G-DFR
+  ```
 
 > **Compatibility Note:** Verified on a MacBook Pro (13", M1, 2020) running macOS 15+. Older macOS releases (12–14) and Intel-based Macs have not been tested. Suspending `ControlStrip` is likely to work similarly on Intel hardware, but display drivers differ and the DMA reference count panic was specifically observed on Apple Silicon.
 
 ---
 
-## Why Halting `TouchBarServer` Causes a Kernel Panic
-
-A common suggestion found online is suspending Touch Bar processes via `kill -STOP`:
-
-```bash
-# Unsafe on newer macOS versions
-kill -STOP $(pgrep TouchBarServer) $(pgrep ControlStrip)
-```
-
-In testing on a MacBook Pro (13", M1, 2020, `MacBookPro17,1`) running macOS 15+, suspending `TouchBarServer` eventually caused a Kernel Panic:
-
-```text
-panic(cpu 1 caller 0xfffffe001ec4cf3c): _dmaReferences overflow @IOMemoryDescriptor.cpp:5086
-...
-Kernel Extensions in backtrace:
-   com.apple.driver.AppleMobileDispH13G-DFR
-```
-
-The `AppleMobileDispH13G-DFR` driver manages frame transmission to the Touch Bar via DMA. Halting `TouchBarServer` stops its message loop. Frame transactions appear to stall without client completion, which likely triggers an overflow of `_dmaReferences` inside `IOMemoryDescriptor` and crashes the kernel.
-
----
-
 ## How It Works
 
-To prevent panics, `touchbar_guard` never sends signals to `TouchBarServer`. Instead, it manages only `ControlStrip`:
+`touchbar_guard` provides a dual-layer defense:
 
-1. **Screen lock or sleep:** The daemon sends `SIGSTOP` to `ControlStrip`. Touch input on the bar no longer adjusts volume, brightness, or controls.
-2. **DFR driver continues running:** `TouchBarServer` continues its event loop uninterrupted, allowing the display driver and DMA transactions to proceed normally.
-3. **Screen unlock or wake:** The daemon sends `SIGCONT` to `ControlStrip`, restoring touch controls.
+### 1. Phantom Touch Shield (`ControlStrip`)
+- **On lock or sleep:** The daemon sends `SIGSTOP` to `ControlStrip`. Touch input on the bar no longer adjusts volume, brightness, or controls.
+- **On unlock or wake:** The daemon sends `SIGCONT` to `ControlStrip`, instantly restoring touch controls.
 
-Events are detected via Darwin BSD notifications (`com.apple.sessionagent.*`, `com.apple.mobile.keybagd.lock_status`), IOKit power/display notifications (`IORegisterForSystemPower`, `IODisplayWrangler`), and Cocoa notifications (`NSWorkspace`, `NSDistributedNotificationCenter`).
+### 2. DMA Watchdog (`TouchBarServer`)
+- Halting `TouchBarServer` with `SIGSTOP` is dangerous because it stalls DMA frame processing and causes a panic within minutes.
+- However, terminating `TouchBarServer` with `SIGKILL` causes `launchd` to immediately respawn it (< 50 ms) with a fresh SkyLight session and cleared DMA queue.
+- `touchbar_guard` acts as a watchdog: it recycles `TouchBarServer` on lock, unlock, and on a 30-minute background timer. This resets the leaked reference count to 0, ensuring `_dmaReferences` never approaches the 32,767 threshold.
+
+Events are detected via Darwin BSD notifications (`com.apple.sessionagent.*`, `com.apple.mobile.keybagd.lock_status`), IOKit power/display notifications (`IORegisterForSystemPower`, `IODisplayWrangler`), Cocoa notifications (`NSWorkspace`, `NSDistributedNotificationCenter`), and a GCD dispatch timer.
 
 ---
 
@@ -70,6 +61,7 @@ Events are detected via Darwin BSD notifications (`com.apple.sessionagent.*`, `c
   ```bash
   killall -CONT ControlStrip
   ```
+- `TouchBarServer` recycling requires root privileges (which the `launchd` daemon has by default). Manual recycling with `--recycle` requires `sudo`.
 
 ---
 
@@ -115,7 +107,7 @@ The script builds a universal binary (`arm64` + `x86_64`), installs it to `/usr/
 
 ## Status & CLI Commands
 
-Check daemon and `ControlStrip` status:
+Check daemon, `ControlStrip`, and `TouchBarServer` status:
 
 ```bash
 touchbar_guard --status
@@ -123,9 +115,10 @@ touchbar_guard --status
 
 Flags:
 ```bash
-touchbar_guard --status    # Show PID and state of daemon and ControlStrip
+touchbar_guard --status    # Show PID and state of touchbar_guard, ControlStrip, and TouchBarServer
 touchbar_guard --freeze    # Manually freeze ControlStrip (SIGSTOP)
 touchbar_guard --thaw      # Manually thaw ControlStrip (SIGCONT)
+touchbar_guard --recycle   # Manually recycle TouchBarServer (SIGKILL, requires sudo)
 touchbar_guard -f          # Run daemon in foreground (debugging)
 ```
 
