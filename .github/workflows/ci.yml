@@ -1,0 +1,28 @@
+name: CI & Build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    name: Build & Test (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Universal Binary (arm64 + x86_64)
+        run: make universal
+
+      - name: Run automated tests
+        run: make test
+
+      - name: Upload Universal Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: touchbar_guard-universal
+          path: bin/touchbar_guard
