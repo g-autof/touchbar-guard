@@ -1,5 +1,7 @@
 # TouchBar Guard (`touchbar_guard`)
 
+[![CI](https://github.com/g-autof/touchbar-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/g-autof/touchbar-guard/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/g-autof/touchbar-guard?color=blue)](https://github.com/g-autof/touchbar-guard/releases/latest)
 [![macOS](https://img.shields.io/badge/macOS-15%2B%20(tested)-blue.svg)](https://apple.com)
 [![Architecture](https://img.shields.io/badge/arch-arm64%20%7C%20x86__64-orange.svg)](https://apple.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
